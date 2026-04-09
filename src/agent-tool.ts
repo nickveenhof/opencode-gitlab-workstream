@@ -84,10 +84,11 @@ export function createAgentTool(
           return `[gas-town] Session created but no ID returned`;
         }
 
-        // Report session ID immediately - before any further work.
+        // Report session ID immediately using the key opencode reads to
+        // render a clickable session link in the sidebar UI.
         toolContext.metadata({
-          title: `[gas-town] session ${sessionID} created`,
-          metadata: { sessionID, agentName, model: model ?? null },
+          title: args.description ?? agentName,
+          metadata: { sessionId: sessionID, agentName, model: model ?? null },
         });
 
         // Send prompt with model override.
