@@ -100,20 +100,46 @@ export function createAgentTool(
           return `[gas-town] Prompt error: ${promptResult.error}`;
         }
 
-        // DEBUG MODE: wait 3s then dump raw session data so we can
-        // understand the actual shapes before writing real polling logic.
-        await new Promise((r) => setTimeout(r, 3000));
+        // Background mode: return immediately with session ID.
+        if (args.run_in_background) {
+          return `[gas-town] Agent started.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`;
+        }
 
-        const debugStatus = await (ctx.client.session as any).status();
-        const debugMessages = await ctx.client.session.messages({ path: { id: sessionID } });
-        const debugSession = await ctx.client.session.get({ path: { id: sessionID } });
+        // Poll session.messages() until last assistant message has
+        // info.time.completed set. That field appears when LLM finishes.
+        // NOTE: session.status() keys by PARENT session ID, not subagent
+        // session ID. Cannot use it to check subagent completion.
+        const MAX_WAIT = 10 * 60 * 1000;
+        const pollStart = Date.now();
 
-        return JSON.stringify({
-          sessionID,
-          status_raw: debugStatus,
-          session_raw: debugSession,
-          messages_raw: debugMessages,
-        }, null, 2).slice(0, 8000);
+        while (Date.now() - pollStart < MAX_WAIT) {
+          if (toolContext.abort?.aborted) {
+            return `[gas-town] Task aborted. Session: ${sessionID}`;
+          }
+
+          await new Promise((r) => setTimeout(r, 500));
+
+          const messagesResult = await ctx.client.session.messages({
+            path: { id: sessionID },
+          });
+          const msgs: any[] = Array.isArray(messagesResult?.data)
+            ? messagesResult.data : [];
+
+          const lastAssistant = msgs
+            .filter((m: any) => m.info?.role === "assistant")
+            .at(-1);
+
+          if (lastAssistant?.info?.time?.completed) {
+            const text = (lastAssistant.parts ?? [])
+              .filter((p: any) => p.type === "text" && p.text)
+              .map((p: any) => p.text)
+              .join("\n");
+            return (text || "[gas-town] Agent completed but returned no text") +
+              `\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`;
+          }
+        }
+
+        return `[gas-town] Agent timed out. Session: ${sessionID}`;
       } catch (e: any) {
         return `[gas-town] Error: ${e.message}`;
       }
