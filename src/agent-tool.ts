@@ -114,14 +114,11 @@ export function createAgentTool(
         const STABILITY_REQUIRED = 3;
 
         while (Date.now() - pollStart < MAX_WAIT) {
-          if (toolContext.abort.aborted) {
+          if (toolContext.abort?.aborted) {
             return `[gas-town] Task aborted. Session: ${sessionID}`;
           }
 
-          // Back off: 500ms for first 30s, 1s up to 2min, 3s after that
-          const elapsed = Date.now() - pollStart;
-          const interval = elapsed < 30000 ? 500 : elapsed < 120000 ? 1000 : 3000;
-          await new Promise((r) => setTimeout(r, interval));
+          await new Promise((r) => setTimeout(r, 500));
 
           // Check if session is idle
           const statusResult = await (ctx.client.session as any).status();
