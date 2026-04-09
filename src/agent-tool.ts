@@ -110,14 +110,19 @@ export function createAgentTool(
         // NOTE: session.status() keys by PARENT session ID, not subagent
         // session ID. Cannot use it to check subagent completion.
         const MAX_WAIT = 10 * 60 * 1000;
+        const POLL_INTERVAL = 500;
+        const LOG_INTERVAL = 5000; // report status every 5s
         const pollStart = Date.now();
+        let lastLogTime = pollStart;
+        let pollCount = 0;
 
         while (Date.now() - pollStart < MAX_WAIT) {
           if (toolContext.abort?.aborted) {
             return `[gas-town] Task aborted. Session: ${sessionID}`;
           }
 
-          await new Promise((r) => setTimeout(r, 500));
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+          pollCount++;
 
           const messagesResult = await ctx.client.session.messages({
             path: { id: sessionID },
@@ -125,9 +130,31 @@ export function createAgentTool(
           const msgs: any[] = Array.isArray(messagesResult?.data)
             ? messagesResult.data : [];
 
-          const lastAssistant = msgs
-            .filter((m: any) => m.info?.role === "assistant")
-            .at(-1);
+          const assistantMsgs = msgs.filter((m: any) => m.info?.role === "assistant");
+          const lastAssistant = assistantMsgs.at(-1);
+          const elapsed = Math.round((Date.now() - pollStart) / 1000);
+
+          // Report status every 5s via toolContext.metadata
+          if (Date.now() - lastLogTime >= LOG_INTERVAL) {
+            lastLogTime = Date.now();
+            const lastParts = lastAssistant?.parts ?? [];
+            const lastText = lastParts
+              .filter((p: any) => p.type === "text" && p.text)
+              .map((p: any) => p.text)
+              .join(" ")
+              .slice(0, 120);
+            toolContext.metadata({
+              title: `[gas-town] ${sessionID} — ${elapsed}s elapsed`,
+              metadata: {
+                poll: pollCount,
+                msgCount: msgs.length,
+                assistantMsgs: assistantMsgs.length,
+                lastAssistantCompleted: !!lastAssistant?.info?.time?.completed,
+                lastAssistantFinish: lastAssistant?.info?.finish ?? null,
+                lastTextPreview: lastText || "(none yet)",
+              },
+            });
+          }
 
           if (lastAssistant?.info?.time?.completed) {
             const text = (lastAssistant.parts ?? [])
