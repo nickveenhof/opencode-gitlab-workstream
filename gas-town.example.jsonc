@@ -1,0 +1,55 @@
+{
+  // Gas Town configuration example.
+  // Copy this to ~/.config/opencode/gas-town.jsonc
+  // or to your project's .opencode/gas-town.jsonc
+  //
+  // Agent names must match what you pass to task(subagent_type="...")
+  // Identity files are paths to markdown files with agent instructions.
+
+  "agents": {
+    // Example: orchestrator agent (no identity, uses AGENTS.md from project)
+    "paul": {
+      "model": "anthropic/claude-sonnet-4-5"
+    },
+
+    // Example: research agent (read-only, cheaper model)
+    "librarian": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "identity": "agents/librarian.md",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "task": false
+      },
+      "maxParallel": 2
+    },
+
+    // Example: exploration agent (read-only, fast model)
+    "explore": {
+      "model": "anthropic/claude-haiku-3-5",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "task": false
+      },
+      "maxParallel": 4
+    },
+
+    // Example: strategic advisor (powerful model, read-only)
+    "oracle": {
+      "model": "anthropic/claude-opus-4",
+      "identity": "agents/oracle.md",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "task": false
+      }
+    },
+
+    // Example: implementation agent (full tool access)
+    "builder": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "identity": "agents/builder.md"
+    }
+  }
+}
