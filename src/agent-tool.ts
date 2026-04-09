@@ -34,6 +34,10 @@ export function createAgentTool(
         .string()
         .optional()
         .describe("Short description of the task"),
+      run_in_background: tool.schema
+        .boolean()
+        .optional()
+        .describe("If true, return immediately with session_id. Default false (wait for result)."),
     },
     async execute(args, toolContext) {
       const agentName = args.subagent_type.toLowerCase();
@@ -96,10 +100,14 @@ export function createAgentTool(
           return `[gas-town] Prompt error: ${promptResult.error}`;
         }
 
-        // Poll for completion using session.status() + stable message count
-        // (same pattern as oh-my-openagent's waitForCompletion)
-        const POLL_INTERVAL = 500;
-        const MAX_WAIT = 5 * 60 * 1000;
+        // Background mode: return immediately, don't poll.
+        if (args.run_in_background) {
+          return `[gas-town] Agent started in background.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`;
+        }
+
+        // Poll for completion using session.status() + stable message count.
+        // Backs off from 500ms to 3s over time to handle slow Opus-class models.
+        const MAX_WAIT = 15 * 60 * 1000; // 15 minutes (Opus needs more time)
         const pollStart = Date.now();
         let lastMsgCount = 0;
         let stablePolls = 0;
@@ -110,7 +118,10 @@ export function createAgentTool(
             return `[gas-town] Task aborted. Session: ${sessionID}`;
           }
 
-          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+          // Back off: 500ms for first 30s, 1s up to 2min, 3s after that
+          const elapsed = Date.now() - pollStart;
+          const interval = elapsed < 30000 ? 500 : elapsed < 120000 ? 1000 : 3000;
+          await new Promise((r) => setTimeout(r, interval));
 
           // Check if session is idle
           const statusResult = await (ctx.client.session as any).status();
