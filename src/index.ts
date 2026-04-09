@@ -8,20 +8,14 @@
  */
 
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
-import {
-  createSystemTransformHook,
-  createToolExecuteAfterHook,
-} from "./hooks.js";
+import { createToolExecuteAfterHook } from "./hooks.js";
 
-const GasTown: Plugin = async (input: PluginInput): Promise<Hooks> => {
-  const { directory } = input;
-
+const GasTown: Plugin = async (_input: PluginInput): Promise<Hooks> => {
   return {
-    // System prompt: inject core-rules.md into every session.
-    // Agent identity is handled natively by opencode via agents/*.md frontmatter.
-    "experimental.chat.system.transform": createSystemTransformHook(directory),
-
-    // Error recovery: JSON truncation + delegate-task retry guidance
+    // Error recovery: JSON truncation + delegate-task retry guidance.
+    // core-rules.md is loaded natively via opencode.json "instructions" field.
+    // Agent identity is loaded natively via agents/*.md frontmatter.
+    // Model routing is configured natively via agents/*.md frontmatter.
     "tool.execute.after": createToolExecuteAfterHook(),
   };
 };

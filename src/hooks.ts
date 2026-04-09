@@ -1,57 +1,15 @@
 /**
  * Gas Town hooks.
  *
- * Two hooks:
- * 1. experimental.chat.system.transform - Inject core-rules.md into every session
- * 2. tool.execute.after - Error recovery (JSON truncation, task retry)
+ * One hook: tool.execute.after
+ * - JSON truncation recovery: detect parse errors and append retry guidance
+ * - Task retry guidance: detect unknown agent type and suggest fix
  *
- * Agent identity injection is handled natively by opencode via
- * YAML frontmatter in agents/*.md files. No plugin hook needed.
- *
- * Model routing is handled natively by opencode via the `model`
- * field in agents/*.md frontmatter. No plugin hook needed.
+ * Everything else is native opencode:
+ * - core-rules.md: loaded via "instructions" in opencode.json
+ * - Agent identity: loaded via YAML frontmatter in agents/*.md
+ * - Model routing: configured via "model" in agents/*.md frontmatter
  */
-
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
-
-// ── Core rules loader ─────────────────────────────────────────────────
-
-let coreRulesCache: string | null = null;
-
-function loadCoreRules(projectDir: string): string {
-  if (coreRulesCache !== null) return coreRulesCache;
-
-  const searchPaths = [
-    join(projectDir, ".opencode", "core-rules.md"),
-    join(projectDir, "core-rules.md"),
-    join(import.meta.dir ?? __dirname, "..", "core-rules.md"),
-  ];
-
-  for (const p of searchPaths) {
-    if (existsSync(p)) {
-      coreRulesCache = readFileSync(p, "utf-8");
-      return coreRulesCache;
-    }
-  }
-
-  coreRulesCache = "";
-  return coreRulesCache;
-}
-
-// ── Hook: experimental.chat.system.transform ──────────────────────────
-
-export function createSystemTransformHook(projectDir: string) {
-  return async (
-    _input: { model: any },
-    output: { system: string[] },
-  ) => {
-    const coreRules = loadCoreRules(projectDir);
-    if (coreRules) {
-      output.system.push(coreRules);
-    }
-  };
-}
 
 // ── Hook: tool.execute.after (error recovery) ─────────────────────────
 
