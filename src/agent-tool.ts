@@ -131,16 +131,20 @@ export function createAgentTool(
             continue;
           }
 
-          // Session idle: check message count stability
+          // Session idle: check message count stability.
+          // normalizeSDKResponse pattern: unwrap .data, fall back to raw response.
           const messagesResult = await ctx.client.session.messages({
             path: { id: sessionID },
           });
-          const msgs: any[] = Array.isArray(messagesResult?.data)
-            ? messagesResult.data
-            : [];
+          const rawMsgs = messagesResult?.data ?? messagesResult ?? [];
+          const msgs: any[] = Array.isArray(rawMsgs) ? rawMsgs : [];
           const currentCount = msgs.length;
 
-          if (currentCount > 0 && currentCount === lastMsgCount) {
+          // Accept stable count OR session already gone (msgs = 0 after being non-zero)
+          const isStable = currentCount > 0 && currentCount === lastMsgCount;
+          const isGone = lastMsgCount > 0 && currentCount === 0;
+
+          if (isStable || isGone) {
             stablePolls++;
             if (stablePolls >= STABILITY_REQUIRED) {
               // Done. Role is at m.info.role, not m.role.
