@@ -100,76 +100,20 @@ export function createAgentTool(
           return `[gas-town] Prompt error: ${promptResult.error}`;
         }
 
-        // Background mode: return immediately, don't poll.
-        if (args.run_in_background) {
-          return `[gas-town] Agent started in background.\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`;
-        }
+        // DEBUG MODE: wait 3s then dump raw session data so we can
+        // understand the actual shapes before writing real polling logic.
+        await new Promise((r) => setTimeout(r, 3000));
 
-        // Poll for completion using session.status() + stable message count.
-        // Backs off from 500ms to 3s over time to handle slow Opus-class models.
-        const MAX_WAIT = 15 * 60 * 1000; // 15 minutes (Opus needs more time)
-        const pollStart = Date.now();
-        let lastMsgCount = 0;
-        let stablePolls = 0;
-        const STABILITY_REQUIRED = 3;
+        const debugStatus = await (ctx.client.session as any).status();
+        const debugMessages = await ctx.client.session.messages({ path: { id: sessionID } });
+        const debugSession = await ctx.client.session.get({ path: { id: sessionID } });
 
-        while (Date.now() - pollStart < MAX_WAIT) {
-          if (toolContext.abort?.aborted) {
-            return `[gas-town] Task aborted. Session: ${sessionID}`;
-          }
-
-          await new Promise((r) => setTimeout(r, 500));
-
-          // Check if session is idle
-          const statusResult = await (ctx.client.session as any).status();
-          const allStatuses = statusResult?.data ?? statusResult ?? {};
-          const sessionStatus = allStatuses[sessionID];
-
-          if (sessionStatus && sessionStatus.type !== "idle") {
-            stablePolls = 0;
-            lastMsgCount = 0;
-            continue;
-          }
-
-          // Session idle: check message count stability.
-          // normalizeSDKResponse pattern: unwrap .data, fall back to raw response.
-          const messagesResult = await ctx.client.session.messages({
-            path: { id: sessionID },
-          });
-          const rawMsgs = messagesResult?.data ?? messagesResult ?? [];
-          const msgs: any[] = Array.isArray(rawMsgs) ? rawMsgs : [];
-          const currentCount = msgs.length;
-
-          // Accept stable count OR session already gone (msgs = 0 after being non-zero)
-          const isStable = currentCount > 0 && currentCount === lastMsgCount;
-          const isGone = lastMsgCount > 0 && currentCount === 0;
-
-          if (isStable || isGone) {
-            stablePolls++;
-            if (stablePolls >= STABILITY_REQUIRED) {
-              // Done. Role is at m.info.role, not m.role.
-              const assistantMsgs = msgs.filter(
-                (m: any) => m.info?.role === "assistant" || m.info?.role === "tool",
-              );
-              const extractedContent: string[] = [];
-              for (const msg of assistantMsgs) {
-                for (const part of msg.parts ?? []) {
-                  if ((part.type === "text" || part.type === "reasoning") && part.text) {
-                    extractedContent.push(part.text);
-                  }
-                }
-              }
-              const text = extractedContent.filter(Boolean).join("\n");
-              return (text || "[gas-town] Agent completed but returned no text") +
-                `\n\n<task_metadata>\nsession_id: ${sessionID}\n</task_metadata>`;
-            }
-          } else {
-            stablePolls = 0;
-            lastMsgCount = currentCount;
-          }
-        }
-
-        return `[gas-town] Agent timed out after 5 minutes. Session: ${sessionID}`;
+        return JSON.stringify({
+          sessionID,
+          status_raw: debugStatus,
+          session_raw: debugSession,
+          messages_raw: debugMessages,
+        }, null, 2).slice(0, 8000);
       } catch (e: any) {
         return `[gas-town] Error: ${e.message}`;
       }
