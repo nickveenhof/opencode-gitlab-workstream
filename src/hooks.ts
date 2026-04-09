@@ -1,17 +1,17 @@
 /**
  * Gas Town hooks.
  *
- * Four hooks that provide the orchestration infrastructure:
- * 1. chat.params     - Override model per agent
- * 2. chat.message    - Inject identity + core-rules into subagent messages
- * 3. tool.execute.after - Error recovery (JSON truncation, delegate-task retry)
- * 4. experimental.chat.system.transform - System prompt injection for subagents
+ * Three hooks:
+ * 1. chat.message    - Inject agent identity from agents/*.md
+ * 2. experimental.chat.system.transform - Inject core-rules.md
+ * 3. tool.execute.after - Error recovery (JSON truncation, task retry)
+ *
+ * Model routing is handled natively by opencode via the `agent`
+ * section in opencode.json. No config file needed here.
  */
 
 import { existsSync, readFileSync } from "fs";
-import { join } from "path";
-import type { GasTownConfig, AgentConfig } from "./config.js";
-import { loadIdentity, parseModelString } from "./config.js";
+import { join, resolve } from "path";
 
 // ── Core rules loader ────────────────────────────────────────────────
 
@@ -20,10 +20,10 @@ let coreRulesCache: string | null = null;
 function loadCoreRules(projectDir: string): string {
   if (coreRulesCache !== null) return coreRulesCache;
 
-  // Search order: project .opencode/, project root, plugin dir
   const searchPaths = [
     join(projectDir, ".opencode", "core-rules.md"),
     join(projectDir, "core-rules.md"),
+    join(import.meta.dir ?? __dirname, "..", "core-rules.md"),
   ];
 
   for (const p of searchPaths) {
@@ -33,122 +33,76 @@ function loadCoreRules(projectDir: string): string {
     }
   }
 
-  // Fallback: bundled core rules
-  const bundled = join(import.meta.dir ?? __dirname, "..", "core-rules.md");
-  if (existsSync(bundled)) {
-    coreRulesCache = readFileSync(bundled, "utf-8");
-    return coreRulesCache;
-  }
-
   coreRulesCache = "";
   return coreRulesCache;
 }
 
-// ── Identity cache ───────────────────────────────────────────────────
+// ── Identity loader ───────────────────────────────────────────────────
 
 const identityCache = new Map<string, string>();
 
-function getIdentity(agentConfig: AgentConfig, projectDir: string): string {
-  if (!agentConfig.identity) return "";
-  const cached = identityCache.get(agentConfig.identity);
+function loadAgentIdentity(agentName: string, projectDir: string): string {
+  const cached = identityCache.get(agentName);
   if (cached !== undefined) return cached;
-  const content = loadIdentity(agentConfig.identity, projectDir);
-  identityCache.set(agentConfig.identity, content);
-  return content;
+
+  // Map agent name to identity file in agents/ directory
+  // Tries: agents/<name>.md, agents/<name>/ directory index
+  const agentsDir = join(projectDir, "agents");
+  const candidates = [
+    join(agentsDir, `${agentName}.md`),
+    // common mapping overrides
+    join(agentsDir, "analytics-insights-mgr.md"),  // librarian
+    join(agentsDir, "developer-advocate.md"),       // oracle
+  ];
+
+  // Direct match first
+  const direct = join(agentsDir, `${agentName}.md`);
+  if (existsSync(direct)) {
+    const content = readFileSync(direct, "utf-8");
+    identityCache.set(agentName, content);
+    return content;
+  }
+
+  // Name mapping: opencode agent names → identity files
+  const nameMap: Record<string, string> = {
+    librarian: "analytics-insights-mgr.md",
+    oracle: "developer-advocate.md",
+    scribe: "technical-writer.md",
+    social: "social-media-mgr.md",
+    sentinel: "fullstack-engineer.md",
+    designer: "ux-designer.md",
+    architect: "solutions-architect.md",
+    reviewer: "quality-reviewer.md",
+  };
+
+  const mapped = nameMap[agentName];
+  if (mapped) {
+    const p = join(agentsDir, mapped);
+    if (existsSync(p)) {
+      const content = readFileSync(p, "utf-8");
+      identityCache.set(agentName, content);
+      return content;
+    }
+  }
+
+  identityCache.set(agentName, "");
+  return "";
 }
 
-// ── Hook: chat.params (model routing) ────────────────────────────────
+// ── Hook: chat.message (identity injection) ───────────────────────────
 
-export function createChatParamsHook(config: GasTownConfig) {
+export function createChatMessageHook(projectDir: string) {
   return async (
-    input: { sessionID: string; agent: string; model: any; provider: any; message: any },
-    output: { temperature: number; topP: number; topK: number; options: Record<string, any> },
+    input: { sessionID: string; agent?: string },
+    output: { message: any; parts: Array<{ type: string; text?: string }> },
   ) => {
     const agentName = input.agent?.toLowerCase?.();
-    if (!agentName) return;
+    if (!agentName || agentName === "paul" || agentName === "build") return;
 
-    const agentConfig = findAgentConfig(config, agentName);
-    if (!agentConfig?.model) return;
-
-    const parsed = parseModelString(agentConfig.model);
-    if (!parsed) return;
-
-    // Override model via output options
-    // opencode reads model override from chat.params output
-    output.options = output.options ?? {};
-    output.options.__gastown_model = parsed;
-
-    if (agentConfig.variant) {
-      output.options.__gastown_variant = agentConfig.variant;
-    }
-    if (agentConfig.reasoningEffort) {
-      output.options.reasoningEffort = agentConfig.reasoningEffort;
-    }
-  };
-}
-
-// ── Hook: experimental.chat.system.transform (identity injection) ────
-
-export function createSystemTransformHook(
-  config: GasTownConfig,
-  projectDir: string,
-) {
-  return async (
-    input: { sessionID?: string; model: any },
-    output: { system: string[] },
-  ) => {
-    // We inject core-rules for all sessions, identity per-agent
-    // Note: we cannot determine agent name from this hook input,
-    // so we inject core-rules universally. Identity injection
-    // happens in chat.message where we have the agent name.
-    const coreRules = loadCoreRules(projectDir);
-    if (coreRules) {
-      output.system.push(coreRules);
-    }
-  };
-}
-
-// ── Hook: chat.message (identity injection per agent) ────────────────
-
-export function createChatMessageHook(
-  config: GasTownConfig,
-  projectDir: string,
-) {
-  return async (
-    input: {
-      sessionID: string;
-      agent?: string;
-      model?: { providerID: string; modelID: string };
-      messageID?: string;
-      variant?: string;
-    },
-    output: {
-      message: any;
-      parts: Array<{ type: string; text?: string }>;
-    },
-  ) => {
-    const agentName = input.agent?.toLowerCase?.();
-    if (!agentName) return;
-
-    const agentConfig = findAgentConfig(config, agentName);
-    if (!agentConfig) return;
-
-    // Model routing: override model via output.message.model
-    // This is how opencode reads per-agent model overrides.
-    if (agentConfig.model) {
-      const parsed = parseModelString(agentConfig.model);
-      if (parsed && output.message) {
-        output.message.model = parsed;
-      }
-    }
-
-    // Inject identity into the first text part
-    const identity = getIdentity(agentConfig, projectDir);
+    const identity = loadAgentIdentity(agentName, projectDir);
     if (!identity) return;
 
-    const firstTextPart = output.parts.find(
-      (p) => p.type === "text" && p.text,
-    );
+    const firstTextPart = output.parts.find((p) => p.type === "text" && p.text);
     if (firstTextPart && firstTextPart.text) {
       firstTextPart.text =
         `<agent-identity>\n${identity}\n</agent-identity>\n\n` +
@@ -157,26 +111,34 @@ export function createChatMessageHook(
   };
 }
 
-// ── Hook: tool.execute.after (error recovery) ────────────────────────
+// ── Hook: experimental.chat.system.transform (core-rules) ────────────
+
+export function createSystemTransformHook(projectDir: string) {
+  return async (
+    _input: { model: any },
+    output: { system: string[] },
+  ) => {
+    const coreRules = loadCoreRules(projectDir);
+    if (coreRules) {
+      output.system.push(coreRules);
+    }
+  };
+}
+
+// ── Hook: tool.execute.after (error recovery) ─────────────────────────
 
 const JSON_ERROR_PATTERNS = [
   "JSON Parse error: Expected '}'",
   "JSON Parse error: Unterminated string",
   "expected string, received undefined",
-  "invalid_type",
 ];
 
-const DELEGATE_TASK_ERROR_PATTERNS = [
+const TASK_ERROR_PATTERNS = [
   {
-    pattern: /Must provide either category or subagent_type/i,
+    pattern: /Unknown agent type: (\w+) is not a valid agent type/i,
     guidance:
-      "[gas-town retry] Missing category or subagent_type. " +
-      "Use: task(subagent_type=\"agent_name\", load_skills=[], prompt=\"...\", run_in_background=false)",
-  },
-  {
-    pattern: /Agent ['"](\w+)['"] is not (?:allowed|found)/i,
-    guidance:
-      "[gas-town retry] Agent not found. Check gas-town.jsonc for available agent names.",
+      "[gas-town] Unknown agent type. Check the `agent` section in opencode.json. " +
+      "Agent name must match exactly what is defined there.",
   },
 ];
 
@@ -187,11 +149,7 @@ export function createToolExecuteAfterHook() {
   ) => {
     if (typeof output.output !== "string") return;
 
-    // JSON truncation recovery
-    const isJsonError = JSON_ERROR_PATTERNS.some((p) =>
-      output.output.includes(p),
-    );
-    if (isJsonError) {
+    if (JSON_ERROR_PATTERNS.some((p) => output.output.includes(p))) {
       output.output +=
         "\n\n[gas-town] JSON truncation detected. " +
         "Do NOT retry with the same payload. " +
@@ -199,10 +157,8 @@ export function createToolExecuteAfterHook() {
       return;
     }
 
-    // Delegate task retry guidance
-    const toolName = input.tool.toLowerCase();
-    if (toolName === "task" || toolName === "call_omo_agent") {
-      for (const { pattern, guidance } of DELEGATE_TASK_ERROR_PATTERNS) {
+    if (input.tool === "task") {
+      for (const { pattern, guidance } of TASK_ERROR_PATTERNS) {
         if (pattern.test(output.output)) {
           output.output += `\n\n${guidance}`;
           return;
@@ -210,19 +166,4 @@ export function createToolExecuteAfterHook() {
       }
     }
   };
-}
-
-// ── Utility ──────────────────────────────────────────────────────────
-
-function findAgentConfig(
-  config: GasTownConfig,
-  agentName: string,
-): AgentConfig | undefined {
-  // Exact match first
-  if (config.agents[agentName]) return config.agents[agentName];
-  // Case-insensitive fallback
-  const key = Object.keys(config.agents).find(
-    (k) => k.toLowerCase() === agentName,
-  );
-  return key ? config.agents[key] : undefined;
 }

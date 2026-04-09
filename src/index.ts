@@ -7,47 +7,24 @@
  * @see https://github.com/nickveenhof/gas-town
  */
 
-import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin";
-import { loadConfig } from "./config.js";
+import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import {
-  createChatParamsHook,
   createChatMessageHook,
   createSystemTransformHook,
   createToolExecuteAfterHook,
 } from "./hooks.js";
-import { createAgentTool } from "./agent-tool.js";
 
 const GasTown: Plugin = async (input: PluginInput): Promise<Hooks> => {
   const { directory } = input;
 
-  // Load configuration
-  const config = loadConfig(directory);
-
-  const agentCount = Object.keys(config.agents).length;
-  if (agentCount === 0) {
-    console.warn(
-      "[gas-town] No agents configured. " +
-      "Create a gas-town.jsonc in .opencode/ or ~/.config/opencode/",
-    );
-  }
-
   return {
-    // Custom tool: spawn subagents with per-agent model routing
-    tool: {
-      call_gas_town_agent: createAgentTool(config, input),
-    },
+    // Identity injection: prepend agent identity to user messages.
+    // Reads agents/*.md files per agent name. Model routing is handled
+    // natively by opencode via the agent section in opencode.json.
+    "chat.message": createChatMessageHook(directory),
 
-    // Model routing: override model per agent based on config
-    "chat.params": createChatParamsHook(config),
-
-    // Identity injection: prepend agent identity to user messages
-    "chat.message": createChatMessageHook(config, directory),
-
-    // System prompt: inject core-rules.md for all sessions
-    "experimental.chat.system.transform": createSystemTransformHook(
-      config,
-      directory,
-    ),
+    // System prompt: inject core-rules.md into every session
+    "experimental.chat.system.transform": createSystemTransformHook(directory),
 
     // Error recovery: JSON truncation + delegate-task retry guidance
     "tool.execute.after": createToolExecuteAfterHook(),
@@ -58,4 +35,3 @@ export default GasTown;
 
 // Named export for explicit import
 export { GasTown };
-export type { GasTownConfig, AgentConfig } from "./config.js";
